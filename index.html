@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a1a" />
+  <title>Rhythm Field</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ===== MENU ===== -->
+    <section id="menu" class="screen active">
+      <h1 class="logo">RHYTHM<span>FIELD</span></h1>
+      <p class="tagline">데스크탑은 키보드(D·F·J·K), 모바일은 레인 터치</p>
+
+      <div class="setup">
+        <label class="field">
+          <span>배경 이미지 <em>(선택)</em></span>
+          <input type="file" id="bgInput" accept="image/*" />
+        </label>
+        <label class="field">
+          <span>노래 파일 <em>(선택 · mp3/wav)</em></span>
+          <input type="file" id="audioInput" accept="audio/*" />
+        </label>
+        <div class="field-row">
+          <label class="field small">
+            <span>BPM</span>
+            <input type="number" id="bpmInput" value="130" min="40" max="300" />
+          </label>
+          <label class="field small">
+            <span>싱크 보정(ms)</span>
+            <input type="number" id="offsetInput" value="0" step="10" />
+          </label>
+        </div>
+      </div>
+
+      <div class="diff-picker" id="diffPicker">
+        <button class="diff" data-diff="easy">EASY</button>
+        <button class="diff selected" data-diff="normal">NORMAL</button>
+        <button class="diff" data-diff="hard">HARD</button>
+      </div>
+
+      <button id="startBtn" class="btn-primary">START</button>
+      <p class="best">BEST: <strong id="bestScore">0</strong></p>
+      <p class="hint-small">노래를 안 넣으면 합성 비트로 플레이됩니다.</p>
+    </section>
+
+    <!-- ===== GAME ===== -->
+    <section id="game" class="screen">
+      <canvas id="board"></canvas>
+
+      <!-- top bar -->
+      <div class="topbar">
+        <div class="top-left">
+          <button id="pauseBtn" class="btn-icon" aria-label="pause">❚❚</button>
+          <div class="bpm-box"><label>BPM</label><span id="bpmShow">130</span></div>
+        </div>
+        <div class="top-right">
+          <label>PROGRESS</label>
+          <div class="prog"><div class="prog-fill" id="progFill"></div></div>
+          <span id="timeShow">0:00 / 0:00</span>
+        </div>
+      </div>
+
+      <!-- left stats -->
+      <div class="stats">
+        <div class="stat-big"><label>SCORE</label><span id="score">0</span></div>
+        <div class="stat-big"><label>ACCURACY</label><span id="accuracy">100%</span></div>
+        <div class="stat-lines">
+          <div class="sl perfect"><label>PERFECT</label><span id="cntPerfect">0</span></div>
+          <div class="sl great"><label>GREAT</label><span id="cntGreat">0</span></div>
+          <div class="sl good"><label>GOOD</label><span id="cntGood">0</span></div>
+          <div class="sl miss"><label>MISS</label><span id="cntMiss">0</span></div>
+          <div class="sl"><label>MAX COMBO</label><span id="maxComboShow">0</span></div>
+        </div>
+      </div>
+
+      <!-- center combo / judge -->
+      <div class="center-hud">
+        <div class="combo-num" id="comboNum">0</div>
+        <div class="combo-label">COMBO</div>
+        <div class="judge" id="judge"></div>
+      </div>
+    </section>
+
+    <!-- ===== PAUSE ===== -->
+    <section id="pause" class="overlay">
+      <div class="card">
+        <h2>일시정지</h2>
+        <button id="resumeBtn" class="btn-primary">계속하기</button>
+        <button id="quitBtn" class="btn-ghost">그만두기</button>
+      </div>
+    </section>
+
+    <!-- ===== RESULT ===== -->
+    <section id="result" class="screen">
+      <h2 class="result-title">RESULT</h2>
+      <div class="result-score" id="finalScore">0</div>
+      <div class="rank" id="rank">A</div>
+      <div class="result-grid">
+        <div><label>MAX COMBO</label><span id="maxCombo">0</span></div>
+        <div><label>ACCURACY</label><span id="finalAcc">0%</span></div>
+        <div><label>PERFECT</label><span id="rPerfect">0</span></div>
+        <div><label>GREAT</label><span id="rGreat">0</span></div>
+        <div><label>GOOD</label><span id="rGood">0</span></div>
+        <div><label>MISS</label><span id="rMiss">0</span></div>
+      </div>
+      <button id="retryBtn" class="btn-primary">다시하기</button>
+      <button id="menuBtn" class="btn-ghost">메뉴로</button>
+    </section>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
