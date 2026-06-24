@@ -123,19 +123,58 @@
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
   }
-  function blip(lane) {
+
+  // Layered hit sound: noise transient + pitched click + body thump
+  function blip(lane, judge) {
     if (!audioCtx) return;
     const t = audioCtx.currentTime;
+    const master = audioCtx.createGain();
+    master.gain.setValueAtTime(judge === 'perfect' ? 1.0 : judge === 'great' ? 0.82 : 0.65, t);
+    master.connect(audioCtx.destination);
+
+    // 1) Noise transient (attack crack)
+    const bufLen = audioCtx.sampleRate * 0.06;
+    const buf = audioCtx.createBuffer(1, bufLen, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufLen, 4);
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buf;
+    const nfilt = audioCtx.createBiquadFilter();
+    nfilt.type = 'bandpass';
+    nfilt.frequency.value = 3200 + lane * 400;
+    nfilt.Q.value = 1.4;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.55, t);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.055);
+    noise.connect(nfilt).connect(ng).connect(master);
+    noise.start(t); noise.stop(t + 0.06);
+
+    // 2) Pitched click (tone body) — lane-tuned
+    const freqs = [280, 340, 400, 480];
     const osc = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime([261, 330, 392, 494][lane], t);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.12, t + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
-    osc.connect(g).connect(audioCtx.destination);
-    osc.start(t); osc.stop(t + 0.16);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freqs[lane] * 1.5, t);
+    osc.frequency.exponentialRampToValueAtTime(freqs[lane], t + 0.04);
+    const og = audioCtx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.30, t + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    osc.connect(og).connect(master);
+    osc.start(t); osc.stop(t + 0.2);
+
+    // 3) Sub thump (punch feel)
+    const sub = audioCtx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(90, t);
+    sub.frequency.exponentialRampToValueAtTime(38, t + 0.1);
+    const sg = audioCtx.createGain();
+    sg.gain.setValueAtTime(0.0001, t);
+    sg.gain.exponentialRampToValueAtTime(0.28, t + 0.006);
+    sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    sub.connect(sg).connect(master);
+    sub.start(t); sub.stop(t + 0.13);
   }
+
   function kick() {
     if (!audioCtx) return;
     const t = audioCtx.currentTime;
@@ -147,6 +186,92 @@
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
     osc.connect(g).connect(audioCtx.destination);
     osc.start(t); osc.stop(t + 0.2);
+  }
+
+  // ---------- fx pools ----------
+  let particles = [];   // { x, y, vx, vy, life, maxLife, r, color }
+  let shockwaves = [];  // { x, y, lane, born, dur }
+  let shake = { dx: 0, dy: 0, until: 0 };
+
+  function spawnHitFX(lane, judge) {
+    const { w, h, vpY, hitY } = geom();
+    const x = laneBottomX(lane, w);
+    const y = hitY;
+    const col = LANE_COLORS[lane];
+    const count = judge === 'perfect' ? 22 : judge === 'great' ? 14 : 8;
+
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.random() * Math.PI * 2);
+      const speed = 2.5 + Math.random() * (judge === 'perfect' ? 7 : 4.5);
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - (judge === 'perfect' ? 3 : 1.5),
+        life: 1, maxLife: 0.55 + Math.random() * 0.35,
+        r: 3 + Math.random() * (judge === 'perfect' ? 5 : 3),
+        color: col,
+      });
+    }
+
+    shockwaves.push({ x, y, lane, born: now(), dur: judge === 'perfect' ? 320 : 220 });
+
+    if (judge === 'perfect') {
+      shake.dx = (Math.random() - 0.5) * 7;
+      shake.dy = (Math.random() - 0.5) * 7;
+      shake.until = now() + 80;
+    } else if (judge === 'great') {
+      shake.dx = (Math.random() - 0.5) * 3.5;
+      shake.dy = (Math.random() - 0.5) * 3.5;
+      shake.until = now() + 50;
+    }
+  }
+
+  function updateFX() {
+    const dt = 1 / 60;
+    for (const p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.22; // gravity
+      p.life -= dt / p.maxLife;
+    }
+    particles = particles.filter((p) => p.life > 0);
+    shockwaves = shockwaves.filter((s) => now() - s.born < s.dur);
+  }
+
+  function drawFX() {
+    const { w, h, hitY } = geom();
+    const t = now();
+
+    // shockwaves
+    for (const s of shockwaves) {
+      const prog = (t - s.born) / s.dur;
+      const radius = laneHalfW(w) * (0.5 + prog * 2.2);
+      const alpha = (1 - prog) * 0.85;
+      const col = LANE_COLORS[s.lane];
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 3 * (1 - prog) + 1;
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 18 * (1 - prog);
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y, radius, radius * 0.28, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // particles
+    for (const p of particles) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.life) * 0.92;
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = p.r * 2.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * Math.max(0, p.life), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   // ---------- state ----------
@@ -174,6 +299,7 @@
       judged: 0, paused: false, ended: false, pausedAt: 0, beatTimer: null,
     };
 
+    particles = []; shockwaves = []; shake = { dx: 0, dy: 0, until: 0 };
     $('bpmShow').textContent = bpm;
     resetHud();
     showScreen('game');
@@ -213,6 +339,7 @@
     rafId = requestAnimationFrame(loop);
     if (!state || state.paused) return;
     update();
+    updateFX();
     draw();
   }
 
@@ -241,6 +368,13 @@
   function draw() {
     const { w, h, vpY, hitY, vpX } = geom();
     ctx.clearRect(0, 0, w, h);
+
+    // screen shake
+    const isShaking = shake.until > now();
+    if (isShaking) {
+      ctx.save();
+      ctx.translate(shake.dx, shake.dy);
+    }
 
     // background image (cover)
     if (bgImage) {
@@ -334,13 +468,26 @@
         if (!state.flash[i] || state.flash[i] < now()) continue;
         const bx0 = laneBottomX(i, w) - laneHalfW(w);
         const bx1 = laneBottomX(i, w) + laneHalfW(w);
-        const a = (state.flash[i] - now()) / 120;
+        const a = (state.flash[i] - now()) / 160;
+        // wider, brighter flash
         ctx.beginPath();
         ctx.moveTo(vpX, vpY); ctx.lineTo(bx0, hitY); ctx.lineTo(bx1, hitY); ctx.closePath();
-        ctx.fillStyle = hexA(LANE_COLORS[i], 0.22 * a);
+        ctx.fillStyle = hexA(LANE_COLORS[i], 0.38 * a);
         ctx.fill();
+        // hit-line burst glow
+        ctx.save();
+        ctx.shadowColor = LANE_COLORS[i];
+        ctx.shadowBlur = 28 * a;
+        ctx.fillStyle = hexA(LANE_COLORS[i], 0.7 * a);
+        ctx.fillRect(bx0, hitY - 5, bx1 - bx0, 10);
+        ctx.restore();
       }
     }
+
+    // FX (particles + shockwaves) on top
+    drawFX();
+
+    if (isShaking) ctx.restore();
   }
 
   function laneHalfW(w) {
@@ -360,8 +507,7 @@
   function hitLane(lane) {
     if (!state || state.paused || state.ended) return;
     if (!state.flash) state.flash = [];
-    state.flash[lane] = now() + 120;
-    blip(lane);
+    state.flash[lane] = now() + 160;
     const t = songTime();
     let best = null, bestAbs = Infinity;
     for (const n of state.notes) {
@@ -369,13 +515,15 @@
       const d = Math.abs(n.t - t);
       if (d < bestAbs && d <= W_MISS) { best = n; bestAbs = d; }
     }
-    if (!best) return;
+    if (!best) { blip(lane, 'good'); return; }
     best.hit = true;
     let judge;
     if (bestAbs <= W_PERFECT) judge = 'perfect';
     else if (bestAbs <= W_GREAT) judge = 'great';
     else if (bestAbs <= W_GOOD) judge = 'good';
     else judge = 'miss';
+    blip(lane, judge);
+    spawnHitFX(lane, judge);
     registerJudge(judge);
   }
 
