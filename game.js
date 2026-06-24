@@ -515,14 +515,13 @@
       const d = Math.abs(n.t - t);
       if (d < bestAbs && d <= W_MISS) { best = n; bestAbs = d; }
     }
-    if (!best) { blip(lane, 'good'); return; }
+    if (!best) return;
     best.hit = true;
     let judge;
     if (bestAbs <= W_PERFECT) judge = 'perfect';
     else if (bestAbs <= W_GREAT) judge = 'great';
     else if (bestAbs <= W_GOOD) judge = 'good';
     else judge = 'miss';
-    blip(lane, judge);
     spawnHitFX(lane, judge);
     registerJudge(judge);
   }
