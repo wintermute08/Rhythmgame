@@ -20,8 +20,8 @@
 
   // perspective tuning
   const VP_Y_RATIO = 0.16;   // vanishing point height (fraction of canvas)
-  const HITLINE_RATIO = 0.86; // hit line height (fraction of canvas)
   const PERSP = 3.2;         // higher = more bunching near the top
+  let hitlineRatio = 0.86;   // adjustable hit line height (fraction of canvas)
 
   // ---------- dom ----------
   const $ = (id) => document.getElementById(id);
@@ -73,7 +73,7 @@
   function geom() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     const vpY = h * VP_Y_RATIO;
-    const hitY = h * HITLINE_RATIO;
+    const hitY = h * hitlineRatio;
     const vpX = w / 2;
     return { w, h, vpY, hitY, vpX };
   }
@@ -842,6 +842,8 @@
   const pressed = new Set();
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Escape') { togglePause(); return; }
+    if (e.code === 'BracketLeft')  { nudgeHitline(-0.02); return; }
+    if (e.code === 'BracketRight') { nudgeHitline(+0.02); return; }
     const lane = KEYS.indexOf(e.code);
     if (lane === -1 || pressed.has(e.code)) return;
     pressed.add(e.code);
@@ -864,6 +866,19 @@
   });
 
   document.addEventListener('visibilitychange', () => { if (document.hidden) togglePause(true); });
+
+  // ---------- hit line adjustment ----------
+  function loadHitline() {
+    try { const v = parseFloat(localStorage.getItem('rf_hitline')); if (!isNaN(v)) hitlineRatio = v; } catch (e) {}
+  }
+  function saveHitline() { try { localStorage.setItem('rf_hitline', hitlineRatio); } catch (e) {} }
+  function nudgeHitline(delta) {
+    hitlineRatio = Math.max(0.50, Math.min(0.95, hitlineRatio + delta));
+    saveHitline();
+    $('hitLabel').textContent = Math.round(hitlineRatio * 100) + '%';
+  }
+  $('hitUp').addEventListener('click', () => nudgeHitline(-0.02));
+  $('hitDown').addEventListener('click', () => nudgeHitline(+0.02));
 
   // ---------- offset persistence + steppers ----------
   function loadOffset() {
@@ -986,6 +1001,8 @@
 
   // ---------- init ----------
   loadOffset();
+  loadHitline();
+  $('hitLabel').textContent = Math.round(hitlineRatio * 100) + '%';
   loadStoredBackground();
   $('bestScore').textContent = loadBest().toLocaleString();
   showScreen('menu');
