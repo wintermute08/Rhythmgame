@@ -25,7 +25,7 @@
 
   // ---------- dom ----------
   const $ = (id) => document.getElementById(id);
-  const screens = { menu: $('menu'), game: $('game'), result: $('result') };
+  const screens = { menu: $('menu'), game: $('game'), result: $('result'), calibrate: $('calibrate') };
   const pauseOverlay = $('pause');
   const canvas = $('board');
   const ctx = canvas.getContext('2d');
@@ -458,7 +458,7 @@
       // before play() kicks in, count down via the lead-in clock
       return (now() - state.startTime) - state.offset;
     }
-    return now() - state.startTime;
+    return (now() - state.startTime) - state.offset;
   }
 
   function scheduleBeat() {
@@ -865,7 +865,127 @@
 
   document.addEventListener('visibilitychange', () => { if (document.hidden) togglePause(true); });
 
+  // ---------- offset persistence + steppers ----------
+  function loadOffset() {
+    try { const v = localStorage.getItem('rf_offset'); if (v !== null) $('offsetInput').value = v; } catch (e) {}
+  }
+  function saveOffset(v) { try { localStorage.setItem('rf_offset', v); } catch (e) {} }
+  function nudgeOffset(delta) {
+    const v = (parseInt($('offsetInput').value, 10) || 0) + delta;
+    $('offsetInput').value = v;
+    saveOffset(v);
+  }
+  $('offMinus').addEventListener('click', () => nudgeOffset(-5));
+  $('offPlus').addEventListener('click', () => nudgeOffset(5));
+  $('offsetInput').addEventListener('change', () => saveOffset($('offsetInput').value));
+
+  // ---------- calibration mini-mode ----------
+  const calib = { running: false, beatTimes: [], diffs: [], schedId: null, beatPeriod: 0.5 };
+
+  function startCalibration() {
+    ensureAudioCtx();
+    calib.running = true;
+    calib.beatTimes = [];
+    calib.diffs = [];
+    $('calibOffset').textContent = '— ms';
+    $('calibCount').textContent = '0';
+    $('calibApply').disabled = true;
+    showScreen('calibrate');
+    // schedule metronome with WebAudio for precise beat times
+    calib.nextBeat = audioCtx.currentTime + 0.5;
+    calib.schedId = setInterval(calibScheduler, 25);
+  }
+
+  function calibScheduler() {
+    if (!calib.running) return;
+    while (calib.nextBeat < audioCtx.currentTime + 0.12) {
+      const tSec = calib.nextBeat;
+      calibKick(tSec);
+      calib.beatTimes.push(tSec * 1000);
+      // visual pulse aligned to the audible beat
+      const delayMs = Math.max(0, (tSec - audioCtx.currentTime) * 1000);
+      setTimeout(pulseVisual, delayMs);
+      calib.nextBeat += calib.beatPeriod;
+    }
+    // prune old beats
+    const cutoff = audioCtx.currentTime * 1000 - 2000;
+    calib.beatTimes = calib.beatTimes.filter((b) => b > cutoff);
+  }
+
+  function calibKick(tSec) {
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.frequency.setValueAtTime(900, tSec);
+    osc.frequency.exponentialRampToValueAtTime(400, tSec + 0.05);
+    g.gain.setValueAtTime(0.0001, tSec);
+    g.gain.exponentialRampToValueAtTime(0.3, tSec + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, tSec + 0.12);
+    osc.connect(g).connect(audioCtx.destination);
+    osc.start(tSec); osc.stop(tSec + 0.13);
+  }
+
+  function pulseVisual() {
+    const core = $('pulseCore'), ring = $('pulseRing');
+    core.classList.remove('beat'); ring.classList.remove('beat');
+    void core.offsetWidth; void ring.offsetWidth;
+    core.classList.add('beat'); ring.classList.add('beat');
+    setTimeout(() => core.classList.remove('beat'), 90);
+  }
+
+  function calibTap() {
+    if (!calib.running || calib.beatTimes.length === 0) return;
+    const tapMs = audioCtx.currentTime * 1000;
+    // nearest scheduled beat
+    let best = calib.beatTimes[0], bestAbs = Infinity;
+    for (const b of calib.beatTimes) {
+      const d = Math.abs(tapMs - b);
+      if (d < bestAbs) { bestAbs = d; best = b; }
+    }
+    // ignore wild taps (more than a quarter-beat off the nearest beat)
+    if (bestAbs > calib.beatPeriod * 1000 * 0.5) return;
+    calib.diffs.push(tapMs - best);
+    const med = median(calib.diffs);
+    $('calibCount').textContent = calib.diffs.length;
+    $('calibOffset').textContent = (med >= 0 ? '+' : '') + Math.round(med) + ' ms';
+    if (calib.diffs.length >= 4) $('calibApply').disabled = false;
+    pulseVisual();
+  }
+
+  function stopCalibration() {
+    calib.running = false;
+    clearInterval(calib.schedId);
+    calib.schedId = null;
+  }
+
+  function median(arr) {
+    if (!arr.length) return 0;
+    const s = [...arr].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  $('calibBtn').addEventListener('click', startCalibration);
+  $('calibCancel').addEventListener('click', () => { stopCalibration(); showScreen('menu'); });
+  $('calibApply').addEventListener('click', () => {
+    const med = Math.round(median(calib.diffs));
+    $('offsetInput').value = med;
+    saveOffset(med);
+    stopCalibration();
+    showScreen('menu');
+  });
+  // tap input during calibration: pointer on the calibrate screen, or Space
+  $('calibrate').addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return; // don't count button presses as taps
+    e.preventDefault();
+    calibTap();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (calib.running && e.code === 'Space') { e.preventDefault(); calibTap(); }
+    if (calib.running && e.code === 'Escape') { stopCalibration(); showScreen('menu'); }
+  });
+
   // ---------- init ----------
+  loadOffset();
   loadStoredBackground();
   $('bestScore').textContent = loadBest().toLocaleString();
   showScreen('menu');

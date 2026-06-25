@@ -28,11 +28,16 @@
             <span>BPM</span>
             <input type="number" id="bpmInput" value="130" min="40" max="300" />
           </label>
-          <label class="field small">
+          <div class="field small">
             <span>싱크 보정(ms)</span>
-            <input type="number" id="offsetInput" value="0" step="10" />
-          </label>
+            <div class="stepper">
+              <button type="button" class="step" id="offMinus">−</button>
+              <input type="number" id="offsetInput" value="0" step="5" />
+              <button type="button" class="step" id="offPlus">+</button>
+            </div>
+          </div>
         </div>
+        <button type="button" id="calibBtn" class="btn-link">🎯 싱크 자동 맞추기</button>
       </div>
 
       <div class="diff-picker" id="diffPicker">
@@ -44,6 +49,25 @@
       <button id="startBtn" class="btn-primary">START</button>
       <p class="best">BEST: <strong id="bestScore">0</strong></p>
       <p class="hint-small">노래를 안 넣으면 합성 비트로 플레이됩니다.</p>
+    </section>
+
+    <!-- ===== CALIBRATE ===== -->
+    <section id="calibrate" class="screen">
+      <h2 class="calib-title">싱크 맞추기</h2>
+      <p class="calib-desc">비트 소리에 맞춰<br><strong>화면을 탭</strong>하거나 <strong>스페이스바</strong>를 누르세요</p>
+      <div class="pulse-wrap">
+        <div class="pulse-ring" id="pulseRing"></div>
+        <div class="pulse-core" id="pulseCore"></div>
+      </div>
+      <div class="calib-readout">
+        <div><label>측정된 지연</label><span id="calibOffset">— ms</span></div>
+        <div><label>탭 횟수</label><span id="calibCount">0</span></div>
+      </div>
+      <div class="calib-actions">
+        <button id="calibApply" class="btn-primary" disabled>적용</button>
+        <button id="calibCancel" class="btn-ghost">취소</button>
+      </div>
+      <p class="hint-small">8회 이상 탭하면 평균이 안정됩니다. 탭이 빠르면 −, 느리면 + 로 보정돼요.</p>
     </section>
 
     <!-- ===== GAME ===== -->
