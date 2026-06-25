@@ -22,6 +22,7 @@
   const VP_Y_RATIO = 0.16;   // vanishing point height (fraction of canvas)
   const PERSP = 2.0;         // higher = more bunching near the top (lower = steadier fall)
   let hitlineRatio = 0.86;   // adjustable hit line height (fraction of canvas)
+  let speedMult = 1.0;       // note speed multiplier (lower approach time = faster)
 
   // ---------- dom ----------
   const $ = (id) => document.getElementById(id);
@@ -88,7 +89,7 @@
   // pixels-per-ms stays the same (the note doesn't appear to slow down).
   const BASE_TRAVEL = 0.86 - VP_Y_RATIO;
   function effApproach(approach) {
-    return approach * ((hitlineRatio - VP_Y_RATIO) / BASE_TRAVEL);
+    return (approach / speedMult) * ((hitlineRatio - VP_Y_RATIO) / BASE_TRAVEL);
   }
 
   function laneBottomX(lane, w) {
@@ -854,6 +855,8 @@
     if (e.code === 'Escape') { togglePause(); return; }
     if (e.code === 'BracketLeft')  { nudgeHitline(-0.02); return; }
     if (e.code === 'BracketRight') { nudgeHitline(+0.02); return; }
+    if (e.code === 'Minus')  { nudgeSpeed(-0.1); return; }
+    if (e.code === 'Equal')  { nudgeSpeed(+0.1); return; }
     const lane = KEYS.indexOf(e.code);
     if (lane === -1 || pressed.has(e.code)) return;
     pressed.add(e.code);
@@ -889,6 +892,19 @@
   }
   $('hitUp').addEventListener('click', () => nudgeHitline(-0.02));
   $('hitDown').addEventListener('click', () => nudgeHitline(+0.02));
+
+  // ---------- speed adjustment ----------
+  function loadSpeed() {
+    try { const v = parseFloat(localStorage.getItem('rf_speed')); if (!isNaN(v)) speedMult = v; } catch (e) {}
+  }
+  function saveSpeed() { try { localStorage.setItem('rf_speed', speedMult); } catch (e) {} }
+  function nudgeSpeed(delta) {
+    speedMult = Math.round(Math.max(0.5, Math.min(3.0, speedMult + delta)) * 10) / 10;
+    saveSpeed();
+    $('speedLabel').textContent = speedMult.toFixed(1) + 'x';
+  }
+  $('speedUp').addEventListener('click', () => nudgeSpeed(+0.1));
+  $('speedDown').addEventListener('click', () => nudgeSpeed(-0.1));
 
   // ---------- offset persistence + steppers ----------
   function loadOffset() {
@@ -1013,6 +1029,8 @@
   loadOffset();
   loadHitline();
   $('hitLabel').textContent = Math.round(hitlineRatio * 100) + '%';
+  loadSpeed();
+  $('speedLabel').textContent = speedMult.toFixed(1) + 'x';
   loadStoredBackground();
   $('bestScore').textContent = loadBest().toLocaleString();
   showScreen('menu');
