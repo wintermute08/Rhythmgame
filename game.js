@@ -39,6 +39,11 @@
   let songBuffer = null;    // ArrayBuffer of the loaded song (for analysis)
   let analysis = null;      // cached { notes, bpm } from analyzeSong
 
+  // live audio-reactive background
+  let analyser = null, freqData = null, audioSourceNode = null, sourceForEl = null;
+  let bgEnergy = 0;         // smoothed overall level 0..1
+  let bgPulse = 0;          // fast beat pulse 0..1 (decays)
+
   const now = () => performance.now();
 
   function showScreen(name) {
@@ -239,6 +244,43 @@
     if (audioCtx.state === 'suspended') audioCtx.resume();
   }
 
+  // Route the playing song through an analyser so the background can react in
+  // real time. A MediaElementSource can only be created once per element, so we
+  // tag the element we wired and skip re-creating on replay.
+  function setupAnalyser() {
+    if (!audioCtx || !audioEl) return;
+    if (sourceForEl === audioEl && analyser) return;
+    try {
+      audioSourceNode = audioCtx.createMediaElementSource(audioEl);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.7;
+      audioSourceNode.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+      sourceForEl = audioEl;
+    } catch (e) { analyser = null; }
+  }
+
+  // Update the background reaction levels each frame.
+  function updateBgReaction() {
+    if (analyser && freqData && state && state.useSong && !audioEl.paused) {
+      analyser.getByteFrequencyData(freqData);
+      let bass = 0;
+      for (let i = 0; i < 6; i++) bass += freqData[i];
+      bass /= 6 * 255;
+      let overall = 0;
+      for (let i = 0; i < freqData.length; i++) overall += freqData[i];
+      overall /= freqData.length * 255;
+      bgPulse = Math.max(bgPulse * 0.90, bass);
+      bgEnergy = bgEnergy * 0.85 + overall * 0.15;
+    } else {
+      // synth fallback: pulse is triggered on each kick, just decay here
+      bgPulse *= 0.90;
+      bgEnergy *= 0.92;
+    }
+  }
+
   // Layered hit sound: noise transient + pitched click + body thump
   function blip(lane, judge) {
     if (!audioCtx) return;
@@ -292,6 +334,7 @@
 
   function kick() {
     if (!audioCtx) return;
+    bgPulse = 1; // drive the background pulse on each synth beat
     const t = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
     const g = audioCtx.createGain();
@@ -449,7 +492,9 @@
     showScreen('game');
     requestAnimationFrame(() => { resize(); });
 
+    bgEnergy = 0; bgPulse = 0;
     if (useSong) {
+      setupAnalyser();
       audioEl.currentTime = 0;
       // small lead-in before the song actually starts
       setTimeout(() => { if (state && !state.ended) audioEl.play().catch(() => {}); }, 2500);
@@ -484,6 +529,7 @@
     rafId = requestAnimationFrame(loop);
     if (!state || state.paused) return;
     update();
+    updateBgReaction();
     updateFX();
     draw();
   }
@@ -521,14 +567,25 @@
       ctx.translate(shake.dx, shake.dy);
     }
 
-    // background image (cover)
+    // background — reacts to the music (beat pulse zoom + brightness)
+    const pulse = bgPulse, energy = bgEnergy;
     if (bgImage) {
-      drawCover(bgImage, w, h);
-      ctx.fillStyle = 'rgba(233,227,211,0.06)';
+      const zoom = 1 + pulse * 0.05 + energy * 0.02;
+      drawCover(bgImage, w, h, zoom);
+      // additive lift on the beat so the image flashes brighter with the music
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(150,150,200,${(pulse * 0.18 + energy * 0.08).toFixed(3)})`;
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+      // base dark wash so notes stay readable; lifts slightly on strong beats
+      ctx.fillStyle = `rgba(8,8,16,${(0.30 - pulse * 0.16).toFixed(3)})`;
       ctx.fillRect(0, 0, w, h);
     } else {
       const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, '#e9e3d3'); grad.addColorStop(1, '#cfc6b0');
+      const lift = pulse * 0.10;
+      grad.addColorStop(0, `rgba(233,227,211,${(0.9 + lift).toFixed(3)})`);
+      grad.addColorStop(1, `rgba(207,198,176,${(0.9 + lift).toFixed(3)})`);
       ctx.fillStyle = grad; ctx.fillRect(0, 0, w, h);
     }
 
@@ -641,11 +698,13 @@
     return (spread / LANES) / 2 * 0.92;
   }
 
-  function drawCover(img, w, h) {
+  function drawCover(img, w, h, zoom) {
+    zoom = zoom || 1;
     const ir = img.width / img.height, cr = w / h;
-    let dw, dh, dx, dy;
-    if (ir > cr) { dh = h; dw = h * ir; dx = (w - dw) / 2; dy = 0; }
-    else { dw = w; dh = w / ir; dx = 0; dy = (h - dh) / 2; }
+    let dw, dh;
+    if (ir > cr) { dh = h; dw = h * ir; } else { dw = w; dh = w / ir; }
+    dw *= zoom; dh *= zoom;
+    const dx = (w - dw) / 2, dy = (h - dh) / 2;
     ctx.drawImage(img, dx, dy, dw, dh);
   }
 
