@@ -35,6 +35,8 @@
   let audioEl = null;       // HTMLAudioElement for user song
   let audioURL = null;      // object URL to revoke
   let audioCtx = null;      // WebAudio for synth fallback / hit sfx
+  let songBuffer = null;    // ArrayBuffer of the loaded song (for analysis)
+  let analysis = null;      // cached { notes, bpm } from analyzeSong
 
   const now = () => performance.now();
 
@@ -115,6 +117,109 @@
     return notes;
   }
 
+  // ---------- onset / beat detection (match notes to the actual song) ----------
+  // Render the decoded audio through a band filter offline, then peak-pick the
+  // energy envelope to find percussive onsets in that band.
+  async function detectBand(buffer, type, freq, q, minGapSec, sensitivity) {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const oac = new OAC(1, buffer.length, buffer.sampleRate);
+    const src = oac.createBufferSource();
+    src.buffer = buffer;
+    const filt = oac.createBiquadFilter();
+    filt.type = type;
+    filt.frequency.value = freq;
+    if (q) filt.Q.value = q;
+    src.connect(filt).connect(oac.destination);
+    src.start(0);
+    const rendered = await oac.startRendering();
+    const data = rendered.getChannelData(0);
+    const sr = rendered.sampleRate;
+
+    // energy envelope (hop ~11ms)
+    const hop = Math.floor(sr * 0.011);
+    const env = [];
+    for (let i = 0; i < data.length; i += hop) {
+      let sum = 0;
+      const end = Math.min(i + hop, data.length);
+      for (let j = i; j < end; j++) sum += data[j] * data[j];
+      env.push(Math.sqrt(sum / (end - i)));
+    }
+
+    // adaptive peak picking
+    const onsets = [];
+    const win = 18; // ~200ms local average window
+    const minGapFrames = Math.max(1, Math.floor(minGapSec / 0.011));
+    let lastIdx = -minGapFrames;
+    for (let i = 1; i < env.length - 1; i++) {
+      let avg = 0, n = 0;
+      for (let k = Math.max(0, i - win); k <= Math.min(env.length - 1, i + win); k++) { avg += env[k]; n++; }
+      avg /= n;
+      const thresh = avg * sensitivity;
+      if (env[i] > thresh && env[i] >= env[i - 1] && env[i] >= env[i + 1] && i - lastIdx >= minGapFrames) {
+        onsets.push((i * hop) / sr * 1000); // ms
+        lastIdx = i;
+      }
+    }
+    return onsets;
+  }
+
+  // Estimate BPM from the median spacing between kick onsets.
+  function estimateBPM(kicks) {
+    if (kicks.length < 4) return null;
+    const gaps = [];
+    for (let i = 1; i < kicks.length; i++) gaps.push(kicks[i] - kicks[i - 1]);
+    gaps.sort((a, b) => a - b);
+    let med = gaps[Math.floor(gaps.length / 2)];
+    // fold into a musical range (90-180 BPM)
+    while (med > 0 && 60000 / med < 90) med /= 2;
+    while (med > 0 && 60000 / med > 200) med *= 2;
+    const bpm = Math.round(60000 / med);
+    return bpm >= 40 && bpm <= 300 ? bpm : null;
+  }
+
+  // Build a chart from detected onsets across bands. Lane is biased by band so
+  // low hits feel different from highs, with anti-repeat for playability.
+  function makeChartFromOnsets(bands, cfg) {
+    const tagged = [];
+    bands.kick.forEach((t) => tagged.push({ t, band: 0 }));
+    bands.snare.forEach((t) => tagged.push({ t, band: 1 }));
+    bands.hat.forEach((t) => tagged.push({ t, band: 2 }));
+    tagged.sort((a, b) => a.t - b.t);
+
+    // enforce minimum spacing by difficulty (dedupe near-simultaneous cross-band)
+    const minGap = cfg.density > 0.85 ? 95 : cfg.density > 0.6 ? 150 : 260;
+    const notes = [];
+    let lastT = -1e9, lastLane = -1;
+    for (const o of tagged) {
+      if (o.t - lastT < minGap) continue;
+      // higher difficulty keeps more onsets; lower drops some non-kick hits
+      if (o.band !== 0 && Math.random() > cfg.density) continue;
+      // lane: kick -> outer, snare -> inner, hat -> spread; avoid repeat
+      let lane;
+      if (o.band === 0) lane = Math.random() < 0.5 ? 0 : 3;
+      else if (o.band === 1) lane = Math.random() < 0.5 ? 1 : 2;
+      else lane = (Math.random() * LANES) | 0;
+      if (lane === lastLane) lane = (lane + 1) % LANES;
+      notes.push({ t: o.t, lane, hit: false });
+      lastT = o.t; lastLane = lane;
+    }
+    return notes;
+  }
+
+  // Decode + analyze the loaded song file into a chart. Returns {notes, bpm}.
+  async function analyzeSong(arrayBuffer, cfg) {
+    ensureAudioCtx();
+    const buf = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    const [kick, snare, hat] = await Promise.all([
+      detectBand(buf, 'lowpass', 150, 1, 0.16, 1.5),    // kick drum
+      detectBand(buf, 'bandpass', 2200, 1.2, 0.16, 1.7), // snare / clap
+      detectBand(buf, 'highpass', 7000, 1, 0.10, 1.9),   // hats / cymbals
+    ]);
+    const bpm = estimateBPM(kick) || estimateBPM(snare);
+    const notes = makeChartFromOnsets({ kick, snare, hat }, cfg);
+    return { notes, bpm };
+  }
+
   // ---------- audio ----------
   function ensureAudioCtx() {
     if (!audioCtx) {
@@ -191,6 +296,7 @@
   // ---------- fx pools ----------
   let particles = [];   // { x, y, vx, vy, life, maxLife, r, color }
   let shockwaves = [];  // { x, y, lane, born, dur }
+  let cores = [];       // { x, y, born, dur, r, color } bright hit-core flash
   let shake = { dx: 0, dy: 0, until: 0 };
 
   function spawnHitFX(lane, judge) {
@@ -198,31 +304,34 @@
     const x = laneBottomX(lane, w);
     const y = hitY;
     const col = LANE_COLORS[lane];
-    const count = judge === 'perfect' ? 22 : judge === 'great' ? 14 : 8;
+    const count = judge === 'perfect' ? 26 : judge === 'great' ? 16 : 9;
 
     for (let i = 0; i < count; i++) {
       const angle = (Math.random() * Math.PI * 2);
-      const speed = 2.5 + Math.random() * (judge === 'perfect' ? 7 : 4.5);
+      const speed = 2.8 + Math.random() * (judge === 'perfect' ? 8 : 5);
       particles.push({
         x, y,
         vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - (judge === 'perfect' ? 3 : 1.5),
+        vy: Math.sin(angle) * speed - (judge === 'perfect' ? 3.4 : 1.7),
         life: 1, maxLife: 0.55 + Math.random() * 0.35,
         r: 3 + Math.random() * (judge === 'perfect' ? 5 : 3),
         color: col,
       });
     }
 
-    shockwaves.push({ x, y, lane, born: now(), dur: judge === 'perfect' ? 320 : 220 });
+    shockwaves.push({ x, y, lane, born: now(), dur: judge === 'perfect' ? 330 : 230 });
+    // bright additive core flash — reads as the "punch" of the hit
+    cores.push({ x, y, born: now(), dur: judge === 'perfect' ? 140 : 100,
+      r: laneHalfW(w) * (judge === 'perfect' ? 1.5 : 1.1), color: col });
 
     if (judge === 'perfect') {
-      shake.dx = (Math.random() - 0.5) * 7;
-      shake.dy = (Math.random() - 0.5) * 7;
-      shake.until = now() + 80;
+      shake.dx = (Math.random() - 0.5) * 8.5;
+      shake.dy = (Math.random() - 0.5) * 8.5;
+      shake.until = now() + 90;
     } else if (judge === 'great') {
-      shake.dx = (Math.random() - 0.5) * 3.5;
-      shake.dy = (Math.random() - 0.5) * 3.5;
-      shake.until = now() + 50;
+      shake.dx = (Math.random() - 0.5) * 4;
+      shake.dy = (Math.random() - 0.5) * 4;
+      shake.until = now() + 55;
     }
   }
 
@@ -236,11 +345,30 @@
     }
     particles = particles.filter((p) => p.life > 0);
     shockwaves = shockwaves.filter((s) => now() - s.born < s.dur);
+    cores = cores.filter((c) => now() - c.born < c.dur);
   }
 
   function drawFX() {
     const { w, h, hitY } = geom();
     const t = now();
+
+    // bright core flash (additive)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const c of cores) {
+      const prog = (t - c.born) / c.dur;
+      const a = (1 - prog);
+      const r = c.r * (0.6 + prog * 0.8);
+      const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+      g.addColorStop(0, `rgba(255,255,255,${0.9 * a})`);
+      g.addColorStop(0.4, hexA(c.color, 0.55 * a));
+      g.addColorStop(1, hexA(c.color, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
 
     // shockwaves
     for (const s of shockwaves) {
@@ -287,16 +415,24 @@
     const useSong = !!audioEl;
     const durationMs = useSong && isFinite(audioEl.duration) ? audioEl.duration * 1000 : 180000;
 
+    // Prefer the analyzed chart (notes on real beats); else BPM-grid fallback.
+    let notes;
+    if (analysis && analysis.notes && analysis.notes.length > 8) {
+      notes = analysis.notes.map((n) => ({ t: n.t, lane: n.lane, hit: false }));
+    } else {
+      notes = makeChart(cfg, bpm, durationMs);
+    }
+
     state = {
       diff, cfg, bpm, offset, useSong, durationMs,
-      notes: makeChart(cfg, bpm, durationMs),
+      notes,
       startTime: now() + 2500,
       score: 0, combo: 0, maxCombo: 0,
       counts: { perfect: 0, great: 0, good: 0, miss: 0 },
       judged: 0, paused: false, ended: false, pausedAt: 0, beatTimer: null,
     };
 
-    particles = []; shockwaves = []; shake = { dx: 0, dy: 0, until: 0 };
+    particles = []; shockwaves = []; cores = []; shake = { dx: 0, dy: 0, until: 0 };
     $('bpmShow').textContent = bpm;
     resetHud();
     // show screen FIRST so canvas has layout dimensions, then resize
@@ -649,6 +785,7 @@
     const btn = e.target.closest('.diff'); if (!btn) return;
     document.querySelectorAll('.diff').forEach((d) => d.classList.remove('selected'));
     btn.classList.add('selected');
+    if (chosenDiff !== btn.dataset.diff) analysis = null; // density differs per difficulty
     chosenDiff = btn.dataset.diff;
   });
 
@@ -665,9 +802,31 @@
     audioURL = URL.createObjectURL(file);
     audioEl = new Audio(audioURL);
     audioEl.preload = 'auto';
+    analysis = null;            // invalidate previous analysis
+    songBuffer = null;
+    file.arrayBuffer().then((ab) => { songBuffer = ab; });
   });
 
-  $('startBtn').addEventListener('click', () => startGame(chosenDiff));
+  async function beginGame(diff) {
+    // If a song is loaded, analyze it once to match notes to the actual beats.
+    if (audioEl && songBuffer && !analysis) {
+      const btn = $('startBtn');
+      const prev = btn.textContent;
+      btn.textContent = '♪ 분석 중...';
+      btn.disabled = true;
+      try {
+        analysis = await analyzeSong(songBuffer, DIFF[diff]);
+        if (analysis.bpm) $('bpmInput').value = analysis.bpm;
+      } catch (err) {
+        analysis = null; // fall back to BPM grid
+      }
+      btn.textContent = prev;
+      btn.disabled = false;
+    }
+    startGame(diff);
+  }
+
+  $('startBtn').addEventListener('click', () => beginGame(chosenDiff));
   $('retryBtn').addEventListener('click', () => startGame(state ? state.diff : chosenDiff));
   $('menuBtn').addEventListener('click', () => { showScreen('menu'); $('bestScore').textContent = loadBest().toLocaleString(); });
   $('pauseBtn').addEventListener('click', () => togglePause(true));
