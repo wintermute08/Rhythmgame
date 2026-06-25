@@ -1,7 +1,7 @@
 :root {
   --bg: #0d0d12;
   --paper: #e9e3d3;
-  --ink: #2a2a33;
+  --ink: #f0f0ff;
   --lane0: #4d9fff;
   --lane1: #3bd1ff;
   --lane2: #b06bff;
@@ -10,7 +10,7 @@
   --great: #4dff9e;
   --good: #4dc3ff;
   --miss: #e0556a;
-  --muted: rgba(42,42,51,0.55);
+  --muted: rgba(200,200,230,0.55);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -127,10 +127,10 @@ html, body {
 .sl { display: flex; gap: 14px; align-items: baseline; font-size: 13px; margin-bottom: 3px; }
 .sl label { width: 84px; letter-spacing: 1px; color: var(--muted); }
 .sl span { font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
-.sl.perfect label { color: #7a6a2a; }
-.sl.great label { color: #2f8f5a; }
-.sl.good label { color: #2f73a0; }
-.sl.miss label { color: #b0414f; }
+.sl.perfect label { color: var(--perfect); }
+.sl.great label { color: var(--great); }
+.sl.good label { color: var(--good); }
+.sl.miss label { color: var(--miss); }
 
 .center-hud {
   position: absolute; top: 30%; left: 0; right: 0; z-index: 4;

@@ -280,7 +280,6 @@
 
   function startGame(diff) {
     ensureAudioCtx();
-    resize();
     const cfg = DIFF[diff];
     const bpm = clampInt($('bpmInput').value, 40, 300, 130);
     const offset = parseInt($('offsetInput').value, 10) || 0;
@@ -291,8 +290,6 @@
     state = {
       diff, cfg, bpm, offset, useSong, durationMs,
       notes: makeChart(cfg, bpm, durationMs),
-      // clock origin: for a song, audio.currentTime is the master clock;
-      // otherwise performance.now() with a lead-in.
       startTime: now() + 2500,
       score: 0, combo: 0, maxCombo: 0,
       counts: { perfect: 0, great: 0, good: 0, miss: 0 },
@@ -302,7 +299,9 @@
     particles = []; shockwaves = []; shake = { dx: 0, dy: 0, until: 0 };
     $('bpmShow').textContent = bpm;
     resetHud();
+    // show screen FIRST so canvas has layout dimensions, then resize
     showScreen('game');
+    requestAnimationFrame(() => { resize(); });
 
     if (useSong) {
       audioEl.currentTime = 0;
@@ -424,7 +423,7 @@
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (let i = 0; i < LANES; i++) {
       const x = laneBottomX(i, w);
-      ctx.fillStyle = 'rgba(42,42,51,0.7)';
+      ctx.fillStyle = 'rgba(20,20,35,0.75)';
       ctx.beginPath(); ctx.roundRect(x - 16, hitY + 14, 32, 26, 6); ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.fillText(KEY_LABEL[i], x, hitY + 28);
