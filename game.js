@@ -20,7 +20,7 @@
 
   // perspective tuning
   const VP_Y_RATIO = 0.16;   // vanishing point height (fraction of canvas)
-  const PERSP = 3.2;         // higher = more bunching near the top
+  const PERSP = 2.0;         // higher = more bunching near the top (lower = steadier fall)
   let hitlineRatio = 0.86;   // adjustable hit line height (fraction of canvas)
 
   // ---------- dom ----------
@@ -82,6 +82,15 @@
     const p = 1 - t;                       // 0 far -> 1 near
     return p / (1 + (1 - p) * (PERSP - 1)); // bunch near the top
   }
+  // Effective approach time: keep the on-screen note SPEED constant regardless of
+  // where the hit line sits. The travel distance is (hitlineRatio - VP_Y_RATIO);
+  // at the default 0.86 line that's 0.70. Shorter travel -> shorter lead time so
+  // pixels-per-ms stays the same (the note doesn't appear to slow down).
+  const BASE_TRAVEL = 0.86 - VP_Y_RATIO;
+  function effApproach(approach) {
+    return approach * ((hitlineRatio - VP_Y_RATIO) / BASE_TRAVEL);
+  }
+
   function laneBottomX(lane, w) {
     // lanes fan out across the central portion of the screen at the hit line
     const spread = Math.min(w * 0.9, 620);
@@ -568,12 +577,13 @@
     // notes (far first)
     const t = songTime();
     const cfg = state.cfg;
+    const approach = effApproach(cfg.approach);
     for (let k = state.notes.length - 1; k >= 0; k--) {
       const n = state.notes[k];
       if (n.hit) continue;
       const dt = n.t - t;
-      if (dt > cfg.approach || dt < -W_MISS) continue;
-      const tt = dt / cfg.approach;         // 1 far -> 0 near
+      if (dt > approach || dt < -W_MISS) continue;
+      const tt = dt / approach;             // 1 far -> 0 near
       const f = perspF(tt);                 // 0 far -> 1 near (perspective)
       const x = lerp(vpX, laneBottomX(n.lane, w), f);
       const y = lerp(vpY, hitY, f);
